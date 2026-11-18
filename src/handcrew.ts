@@ -10,6 +10,7 @@
 import {
   BoxGeometry,
   CanvasTexture,
+  Color,
   createSystem,
   CylinderGeometry,
   DoubleSide,
@@ -37,6 +38,8 @@ const DESK_Y = 0.78; // desk top height — seated reach
 const DESK_Z = -0.62;
 const FORGE = new Vector3(0, DESK_Y + 0.02, -0.55);
 const STORAGE_KEY = 'handcrew.v1';
+/** Autonomy by distance: agents pushed out to arm's length act without asking. */
+const AUTONOMY_DIST = 0.72;
 
 // ---------------------------------------------------------------- text labels
 interface Label {
@@ -115,6 +118,10 @@ function makeLabel(widthM: number, heightM: number, pxPerM = 900, bg = 'rgba(14,
   };
   return { mesh, draw };
 }
+
+const ROLE_COLOR: Record<string, number> = Object.fromEntries(
+  ROLES.map((r) => [r.id, new Color(r.color).getHex()]),
+);
 
 // ---------------------------------------------------------------- audio
 let audioCtx: AudioContext | null = null;
@@ -204,6 +211,7 @@ export class HandcrewSystem extends createSystem({
   private tmp2 = new Vector3();
   private up = new Vector3(0, 1, 0);
   private welcomeBack = false;
+  private paused = false;
   private elapsed = 0;
 
   init(): void {
@@ -423,6 +431,37 @@ export class HandcrewSystem extends createSystem({
     return agent;
   }
 
+  /** Horizontal distance from the user's head decides how much an agent is trusted. */
+  private isAutonomous(a: AgentData) {
+    a.root.getWorldPosition(this.tmp);
+    return Math.hypot(this.tmp.x - this.headPos.x, this.tmp.z - this.headPos.z) > AUTONOMY_DIST;
+  }
+
+  /** Conductor gesture: an open hand with the palm facing up pauses the crew. */
+  private detectPalmUp(): boolean {
+    const frame = this.world.xrFrame;
+    const ref = this.world.xrReferenceSpace;
+    if (!frame || !ref) return false;
+    for (const src of frame.session.inputSources) {
+      if (!src.hand) continue;
+      const joint = src.hand.get('middle-finger-metacarpal');
+      const tip = src.hand.get('middle-finger-tip');
+      if (!joint || !tip) continue;
+      const pose = frame.getJointPose?.(joint, ref);
+      const tipPose = frame.getJointPose?.(tip, ref);
+      if (!pose || !tipPose) continue;
+      const { x, z } = pose.transform.orientation;
+      // palm normal is the joint's local -Y; its world-up component:
+      const palmNormalY = -(1 - 2 * (x * x + z * z));
+      // open hand: middle fingertip well away from its metacarpal
+      const p = pose.transform.position;
+      const q = tipPose.transform.position;
+      const open = Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) > 0.075;
+      if (palmNormalY > 0.75 && open) return true;
+    }
+    return false;
+  }
+
   private level(a: AgentData) {
     return 1 + Math.floor(a.xp / 2);
   }
@@ -445,7 +484,7 @@ export class HandcrewSystem extends createSystem({
     const n = this.agents.length;
     const angles = [0, -18, 18, -34, 34, -48, 48, -9, 9, -26, 26];
     const deg = angles[n % angles.length];
-    const r = 0.7;
+    const r = 0.6;
     const rad = (deg * Math.PI) / 180;
     return new Vector3(Math.sin(rad) * r, 1.04 + (n >= 7 ? 0.18 : 0), -Math.cos(rad) * r);
   }
@@ -588,7 +627,7 @@ export class HandcrewSystem extends createSystem({
 
   private tickRun(dt: number) {
     const run = this.run;
-    if (!run) return;
+    if (!run || this.paused) return;
     run.timer += dt;
     const agent = run.queue[run.step];
     const task = TASKS[run.taskIndex];
@@ -602,7 +641,12 @@ export class HandcrewSystem extends createSystem({
           run.pending = runStep(agent.role, run.taskIndex, run.step, prev);
           run.phase = 'speak';
           run.timer = 0;
-          if (run.pending.needsApproval) {
+          if (run.pending.needsApproval && this.isAutonomous(agent)) {
+            const line = run.pending.approvedLine ?? run.pending.line;
+            this.say(agent, [`${agent.name} · autonomous`, line], '#e8f6ff');
+            run.transcript.push(`${agent.name}: ${line}`);
+            beep(990, 0.1, 'triangle');
+          } else if (run.pending.needsApproval) {
             this.say(agent, [`${agent.name} needs you`, run.pending.line], '#ffb020');
             agent.waiting = true;
             agent.flag.visible = true;
@@ -703,7 +747,9 @@ export class HandcrewSystem extends createSystem({
     else if (this.runs === 0) step = 'Now pinch a task card (right) and drop it onto your agent.';
     else if (this.links.length === 0)
       step = 'Forge a second agent, then pinch one and touch it to the other to form a crew.';
-    else step = 'Hand your crew a harder task. Agents level up and grow with every job.';
+    else
+      step =
+        "Tip: push an agent out to arm's length and its halo turns white: it acts on its own. Pull it close to supervise.";
     this.board.draw(
       [`AGENT ATELIER  ·  ${n} agent${n === 1 ? '' : 's'}  ·  ${teams} crew${teams === 1 ? '' : 's'}  ·  ${this.runs} job${this.runs === 1 ? '' : 's'} done`, step],
       this.run?.phase === 'approve' ? '#ffb020' : '#7cf',
@@ -789,7 +835,11 @@ export class HandcrewSystem extends createSystem({
       const bob = Math.sin(t * 2 + a.id) * 0.004 + (a.thinking ? Math.sin(t * 18) * 0.004 : 0);
       a.body.position.y = bob;
       a.halo.rotation.z += delta * (a.thinking ? 6 : 0.6);
-      (a.halo.material as MeshBasicMaterial).opacity = a.thinking ? 0.95 : 0.45;
+      const haloMat = a.halo.material as MeshBasicMaterial;
+      haloMat.opacity = a.thinking ? 0.95 : 0.45;
+      const auto = this.isAutonomous(a);
+      haloMat.color.set(auto ? 0xffffff : ROLE_COLOR[a.role]);
+      a.halo.scale.setScalar(auto ? 1.35 : 1);
       a.flag.rotation.z = a.waiting ? Math.sin(t * 10) * 0.4 : 0;
       const m = a.body.material as MeshStandardMaterial;
       m.emissiveIntensity += ((a.thinking ? 0.9 : 0.25) - m.emissiveIntensity) * Math.min(1, delta * 3);
@@ -815,6 +865,15 @@ export class HandcrewSystem extends createSystem({
       else mat.color.set(0xffd166);
     }
     this.board.mesh.lookAt(this.headPos);
+
+    const palmUp = this.detectPalmUp();
+    if (palmUp !== this.paused) {
+      this.paused = palmUp;
+      if (this.run) {
+        beep(palmUp ? 300 : 600, 0.15, 'triangle');
+        this.refreshBoard(palmUp ? 'Paused. Your open palm is holding the crew. Lower it to resume.' : undefined);
+      }
+    }
 
     const prevPhase = this.run?.phase;
     const prevStep = this.run?.step;
