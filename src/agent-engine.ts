@@ -104,7 +104,7 @@ export function runStep(role: RoleId, taskIndex: number, _step: number, prev: st
         line: `Risk: ${t.risk} Fix it before shipping?`,
         needsApproval: true,
         approvedLine: `Fixed. ${t.fix}`,
-        revisedLine: `Shipped as-is. Logged the risk: ${t.risk}`,
+        revisedLine: `Revised deeper: ${t.fix} Added a follow-up check so it can't slip back in.`,
       };
   }
 }

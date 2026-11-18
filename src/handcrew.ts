@@ -9,18 +9,13 @@
  */
 import {
   BoxGeometry,
-  BufferGeometry,
   CanvasTexture,
-  Color,
   createSystem,
   CylinderGeometry,
   DoubleSide,
   Entity,
-  Float32BufferAttribute,
   Grabbed,
   Group,
-  Line,
-  LineBasicMaterial,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
@@ -162,7 +157,7 @@ interface AgentData {
 interface LinkData {
   a: AgentData;
   b: AgentData;
-  line: Line;
+  line: Mesh;
 }
 
 interface RunState {
@@ -207,6 +202,8 @@ export class HandcrewSystem extends createSystem({
   private headPos = new Vector3();
   private tmp = new Vector3();
   private tmp2 = new Vector3();
+  private up = new Vector3(0, 1, 0);
+  private welcomeBack = false;
   private elapsed = 0;
 
   init(): void {
@@ -216,7 +213,11 @@ export class HandcrewSystem extends createSystem({
     this.buildCards();
     this.buildApproval();
     this.restore();
-    this.refreshBoard();
+    this.refreshBoard(
+      this.welcomeBack
+        ? `Welcome back! Your crew of ${this.agents.length} kept your ${this.shelf.length} finished job${this.shelf.length === 1 ? '' : 's'} on the shelf. Hand them a new task.`
+        : undefined,
+    );
 
     this.queries.grabbedCores.subscribe('disqualify', (e) => this.onCoreReleased(e));
     this.queries.grabbedAgents.subscribe('disqualify', (e) => this.onAgentReleased(e));
@@ -277,7 +278,7 @@ export class HandcrewSystem extends createSystem({
 
   private buildBoard() {
     this.board = makeLabel(1.1, 0.3, 900);
-    this.board.mesh.position.set(0, 1.55, -1.35);
+    this.board.mesh.position.set(0, 1.78, -1.45);
     this.world.createTransformEntity(this.board.mesh);
   }
 
@@ -294,7 +295,7 @@ export class HandcrewSystem extends createSystem({
       tag.mesh.position.set(0, 0.065, 0);
       tag.mesh.rotation.x = -0.5;
       g.add(tag.mesh);
-      const home = new Vector3(-0.62 + (i % 2) * 0.14, DESK_Y + 0.05, -0.5 - Math.floor(i / 2) * 0.16);
+      const home = new Vector3(-0.5 + (i % 2) * 0.13, DESK_Y + 0.05, -0.42 - Math.floor(i / 2) * 0.14);
       g.position.copy(home);
       const e = this.world.createTransformEntity(g);
       e.addComponent(OneHandGrabbable, { rotate: false });
@@ -316,7 +317,7 @@ export class HandcrewSystem extends createSystem({
       face.mesh.rotation.x = -Math.PI / 2;
       face.mesh.position.y = 0.004;
       g.add(face.mesh);
-      const home = new Vector3(0.42 + (i % 2) * 0.19, DESK_Y + 0.01, -0.46 - Math.floor(i / 2) * 0.14);
+      const home = new Vector3(0.34 + (i % 2) * 0.18, DESK_Y + 0.01, -0.42 - Math.floor(i / 2) * 0.13);
       g.position.copy(home);
       g.rotation.x = 0.35; // tilt toward the user
       const e = this.world.createTransformEntity(g);
@@ -356,7 +357,7 @@ export class HandcrewSystem extends createSystem({
     no.g.position.set(0.11, DESK_Y + 0.015, -0.4);
     this.setApprovalVisible(false);
     const reset = this.makeButton('reset', '#555c70', 'NEW CREW', 0.035);
-    reset.g.position.set(-0.68, DESK_Y + 0.015, -0.36);
+    reset.g.position.set(-0.66, DESK_Y + 0.015, -0.36);
   }
 
   private setApprovalVisible(v: boolean) {
@@ -444,9 +445,9 @@ export class HandcrewSystem extends createSystem({
     const n = this.agents.length;
     const angles = [0, -18, 18, -34, 34, -48, 48, -9, 9, -26, 26];
     const deg = angles[n % angles.length];
-    const r = 0.95;
+    const r = 0.7;
     const rad = (deg * Math.PI) / 180;
-    return new Vector3(Math.sin(rad) * r, 1.02 + (n >= 7 ? 0.2 : 0), -Math.cos(rad) * r);
+    return new Vector3(Math.sin(rad) * r, 1.04 + (n >= 7 ? 0.18 : 0), -Math.cos(rad) * r);
   }
 
   private teamOf(a: AgentData): AgentData[] {
@@ -468,9 +469,10 @@ export class HandcrewSystem extends createSystem({
 
   private link(a: AgentData, b: AgentData, quiet = false) {
     if (a === b || this.links.some((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a))) return;
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new Float32BufferAttribute(new Float32Array(6), 3));
-    const line = new Line(geo, new LineBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.85 }));
+    const line = new Mesh(
+      new CylinderGeometry(0.006, 0.006, 1, 10, 1, true),
+      new MeshBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.9 }),
+    );
     line.frustumCulled = false;
     this.world.createTransformEntity(line);
     this.links.push({ a, b, line });
@@ -750,6 +752,7 @@ export class HandcrewSystem extends createSystem({
     }
     this.shelf = data.shelf ?? [];
     this.runs = data.runs ?? 0;
+    this.welcomeBack = this.agents.length > 0;
     this.renderShelf();
   }
 
@@ -794,15 +797,19 @@ export class HandcrewSystem extends createSystem({
       a.bubble.mesh.lookAt(this.headPos);
     }
     for (const l of this.links) {
-      const arr = (l.line.geometry.getAttribute('position') as Float32BufferAttribute).array as Float32Array;
       l.a.root.getWorldPosition(this.tmp);
       l.b.root.getWorldPosition(this.tmp2);
-      arr.set([this.tmp.x, this.tmp.y - 0.06, this.tmp.z, this.tmp2.x, this.tmp2.y - 0.06, this.tmp2.z]);
-      l.line.geometry.getAttribute('position').needsUpdate = true;
+      this.tmp.y -= 0.07;
+      this.tmp2.y -= 0.07;
+      l.line.position.addVectors(this.tmp, this.tmp2).multiplyScalar(0.5);
+      this.tmp2.sub(this.tmp);
+      const len = this.tmp2.length();
+      l.line.scale.set(1, Math.max(len, 0.001), 1);
+      l.line.quaternion.setFromUnitVectors(this.up, this.tmp2.normalize());
       const active = this.run && this.run.queue.includes(l.a) && this.run.queue.includes(l.b);
-      (l.line.material as LineBasicMaterial).color = active
-        ? new Color().setHSL((t * 0.5) % 1, 0.8, 0.6)
-        : (l.line.material as LineBasicMaterial).color;
+      const mat = l.line.material as MeshBasicMaterial;
+      if (active) mat.color.setHSL((t * 0.5) % 1, 0.8, 0.6);
+      else mat.color.set(0xffd166);
     }
     this.board.mesh.lookAt(this.headPos);
 
