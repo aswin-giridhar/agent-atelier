@@ -757,7 +757,10 @@ export class HandcrewSystem extends createSystem({
   }
 
   private clearCrew() {
-    for (const l of this.links) l.line.removeFromParent();
+    for (const l of this.links) {
+      l.line.visible = false;
+      l.line.removeFromParent();
+    }
     for (const a of this.agents) {
       this.agentByEntity.delete(a.entity);
       a.entity.dispose();
