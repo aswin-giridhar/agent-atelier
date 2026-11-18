@@ -5,6 +5,10 @@
 Built for the Meta VR Start Developer Competition 2026 (Productivity track, New Experience).
 
 ## Try it
+- **Live:** https://aswingiridhar.com/agent-atelier/
+- **Mirror:** https://agent-atelier-metavr.vercel.app
+- **Demo video:** https://youtu.be/8-t-q7oFkL4
+
 Open the live link in the Meta Quest Browser and press **Enter VR**. Hands only.
 
 1. Pinch a glowing **role core** (left of the desk) and drop it on the gold **FORGE** ring. An agent appears.
